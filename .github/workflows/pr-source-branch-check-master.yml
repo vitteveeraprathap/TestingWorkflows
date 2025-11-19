@@ -1,0 +1,26 @@
+name: Validate develop branch for master
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  validate_master_source:
+    name: Validate develop to master PR
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.base.ref == 'master' }}
+    steps:
+      - name: Check PR source branch for master
+        shell: bash
+        run: |
+          head="${{ github.head_ref }}"
+          base="${{ github.base_ref }}"
+          echo "Target branch: $base"
+          echo "Source branch: $head"
+
+          if [[ "$head" != "develop" ]]; then
+            echo "ERROR: Only 'develop' branch can be merged into 'master'."
+            exit 1
+          fi
+
+          echo "Source branch '$head' is valid for merging into 'master'."

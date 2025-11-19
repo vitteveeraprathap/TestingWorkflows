@@ -1,0 +1,64 @@
+name: Validate Branch and Environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to validate against'
+        required: true
+        type: string
+    outputs:
+      is_valid:
+        description: 'Whether the branch-environment combination is valid'
+        value: ${{ jobs.validate.outputs.is_valid }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      is_valid: ${{ steps.check.outputs.is_valid }}
+    steps:
+      - name: Validate Branch and Environment
+        id: check
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          ENV="${{ inputs.environment }}"
+          
+          echo "Current branch: $BRANCH"
+          echo "Requested environment: $ENV"
+          
+          # Feature branches (feature/se-*) can only deploy to dev or sbx
+          if [[ "$BRANCH" == feature/se-* ]]; then
+            if [[ "$ENV" == "dev" || "$ENV" == "sbx" ]]; then
+              echo "✅ Feature branch can deploy to dev/sbx"
+              echo "is_valid=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "❌ Feature branches can only deploy to dev or sbx environments"
+              echo "is_valid=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          # Develop branch can only deploy to uat
+          elif [[ "$BRANCH" == "develop" ]]; then
+            if [[ "$ENV" == "uat" ]]; then
+              echo "✅ Develop branch can deploy to uat"
+              echo "is_valid=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "❌ Develop branch can only deploy to uat environment"
+              echo "is_valid=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          # Master branch can only deploy to prd
+          elif [[ "$BRANCH" == "master" || "$BRANCH" == "main" ]]; then
+            if [[ "$ENV" == "prd" ]]; then
+              echo "✅ Master branch can deploy to prd"
+              echo "is_valid=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "❌ Master branch can only deploy to prd environment"
+              echo "is_valid=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          else
+            echo "❌ Unknown branch pattern: $BRANCH"
+            echo "is_valid=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi

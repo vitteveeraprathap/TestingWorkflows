@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "acrName": { "value": "crbttsbxwus2001" },
+    "location": { "value": "westus2" },
+    "sku": { "value": "Basic" },
+    "adminUserEnabled": { "value": false },
+    "logAnalyticsName": { "value": "law-btt-sbx-wus2-001" },
+    "diagnosticSettingName": { "value": "diag-crbttsbxwus2001" },
+    "tags": {
+      "value": {
+        "name": "crbttsbxwus2001",
+        "environment": "sandbox",
+        "department": "btt gdc architecture",
+        "cost-center": "510",
+        "technical-manager": "Mark Pope",
+        "application": "btt"
+      }
+    }
+  }
+}

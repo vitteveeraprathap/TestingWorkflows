@@ -1,0 +1,32 @@
+name: Validate feature branch for develop
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  validate_feature_branch:
+    name: Validate feature branch name
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.base.ref == 'develop' }}
+    steps:
+      - name: Check PR source branch naming
+        shell: bash
+        run: |
+          head="${{ github.head_ref }}"
+          base="${{ github.base_ref }}"
+          echo "Target branch: $base"
+          echo "Source branch: $head"
+
+          # Pattern: only allow feature/se-{JIRAID}
+          # Example valid branches: feature/se-ABC-123 or feature/se-1234
+          pattern='^feature/se-[A-Za-z0-9._-]+$'
+
+          if [[ ! "$head" =~ $pattern ]]; then
+            echo "ERROR: Invalid source branch."
+            echo "Only branches following the pattern 'feature/se-{JIRAID}' can merge into 'develop'."
+            echo "Example: feature/se-ABC-123"
+            exit 1
+          fi
+
+          echo "Source branch '$head' is valid for merging into 'develop'."

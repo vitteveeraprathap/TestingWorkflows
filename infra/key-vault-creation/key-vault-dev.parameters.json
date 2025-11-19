@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "keyVaultName": {
+      "value": "kv-btt-dev-wus2-001"
+    },
+    "location": {
+      "value": "westus2"
+    },
+    "adminObjectId": {
+      "value": "fb9dabe4-3318-4e31-b467-dc702db4a3e5"
+    },
+    "logAnalyticsName": {
+      "value": "law-btt-dev-wus2-001"
+    },
+    "diagnosticSettingName": {
+      "value": "diag-kv-btt-dev-wus2-001"
+    },
+    "tags": {
+      "value": {
+        "name": "kv-btt-dev-wus2-001",
+        "environment": "development",
+        "department": "btt gdc architecture",
+        "cost-center": "510",
+        "technical-manager": "veera",
+        "application": "btt"
+      }
+    }
+  }
+}
