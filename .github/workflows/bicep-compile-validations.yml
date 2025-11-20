@@ -82,7 +82,7 @@ jobs:
             echo "Linting: $file"
             az bicep lint --file "$file"
           done
-          echo "✅ All Bicep modules linted successfully!"
+          echo "All Bicep modules linted successfully!"
           echo "::endgroup::"
 
       - name: Build all Bicep modules
@@ -92,7 +92,7 @@ jobs:
             echo "Building: $file"
             az bicep build --file "$file"
           done
-          echo "✅ All Bicep modules compiled successfully!"
+          echo "All Bicep modules compiled successfully!"
           echo "::endgroup::"
 
       - name: Check if Resource Group exists
