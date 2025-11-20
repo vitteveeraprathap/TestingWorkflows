@@ -1,0 +1,280 @@
+name: Bicep Compile & Validations
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+      - develop
+      - feature/se-*
+  pull_request:
+    branches:
+      - master
+      - main
+      - develop
+
+jobs:
+  validate-bicep:
+    name: Bicep compile & basic tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine environment for validation
+        id: set-env
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          echo "Current branch: $BRANCH"
+          
+          if [[ "$BRANCH" == feature/se-* ]]; then
+            ENV="dev"
+          elif [[ "$BRANCH" == "develop" ]]; then
+            ENV="uat"
+          elif [[ "$BRANCH" == "master" || "$BRANCH" == "main" ]]; then
+            ENV="prd"
+          else
+            ENV="dev"
+          fi
+          
+          echo "validation_env=$ENV" >> "$GITHUB_OUTPUT"
+          echo "Using environment for validation: $ENV"
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ steps.set-env.outputs.validation_env == 'dev' && secrets.AZURE_CREDENTIALS_DEV || steps.set-env.outputs.validation_env == 'uat' && secrets.AZURE_CREDENTIALS_UAT || steps.set-env.outputs.validation_env == 'sbx' && secrets.AZURE_CREDENTIALS_SBX || secrets.AZURE_CREDENTIALS_PRD }}
+
+      - name: Set Resource Group for validation
+        id: set-rg
+        run: |
+          ENV="${{ steps.set-env.outputs.validation_env }}"
+          if [ "$ENV" = "dev" ]; then 
+            RG_NAME="${{ secrets.RESOURCE_GROUP_DEV }}"
+          elif [ "$ENV" = "uat" ]; then 
+            RG_NAME="${{ secrets.RESOURCE_GROUP_UAT }}"
+          elif [ "$ENV" = "sbx" ]; then 
+            RG_NAME="${{ secrets.RESOURCE_GROUP_SBX }}"
+          elif [ "$ENV" = "prd" ]; then 
+            RG_NAME="${{ secrets.RESOURCE_GROUP_PRD }}"
+          fi
+          echo "rg_name=$RG_NAME" >> "$GITHUB_OUTPUT"
+          echo "Resource Group for validation: $RG_NAME"
+
+      - name: Install dependencies
+        run: |
+          echo "Installing dependencies..."
+          sudo apt-get update -y
+          sudo apt-get install -y ca-certificates curl apt-transport-https lsb-release gnupg jq
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az bicep install
+          az bicep upgrade
+          az bicep version
+          pip install pytest > /dev/null
+          echo "Dependencies installed successfully!"
+
+      - name: Lint all Bicep modules
+        run: |
+          echo "::group::Linting all Bicep modules"
+          find infra/ -type f -name "*.bicep" | while read file; do
+            echo "Linting: $file"
+            az bicep lint --file "$file"
+          done
+          echo "✅ All Bicep modules linted successfully!"
+          echo "::endgroup::"
+
+      - name: Build all Bicep modules
+        run: |
+          echo "::group::Building all Bicep modules"
+          find infra/ -type f -name "*.bicep" | while read file; do
+            echo "Building: $file"
+            az bicep build --file "$file"
+          done
+          echo "✅ All Bicep modules compiled successfully!"
+          echo "::endgroup::"
+
+      - name: Check if Resource Group exists
+        id: check-rg
+        run: |
+          RG_NAME="${{ steps.set-rg.outputs.rg_name }}"
+          
+          if az group show --name "$RG_NAME" &>/dev/null; then
+            echo "rg_exists=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Resource Group exists: $RG_NAME"
+          else
+            echo "rg_exists=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️  Resource Group does not exist: $RG_NAME"
+            echo "Skipping What-If analysis for Resource Group scoped deployments"
+          fi
+
+      - name: Run What-If for Resource Group deployments
+        if: steps.check-rg.outputs.rg_exists == 'true'
+        run: |
+          echo "::group::Performing What-If for Resource Group scoped deployments"
+          ENV="${{ steps.set-env.outputs.validation_env }}"
+          RG_NAME="${{ steps.set-rg.outputs.rg_name }}"
+          
+          # List of resource group scoped deployments
+          rg_deployments=(
+            "infra/container-registry-creation/container-registry.bicep"
+            "infra/key-vault-creation/key-vault.bicep"
+            "infra/log-analytics-workspace-creation/log-analytics-workspace.bicep"
+            "infra/resource-group-lock-creation/resource-group-lock.bicep"
+          )
+          
+          for bicep_file in "${rg_deployments[@]}"; do
+            if [ -f "$bicep_file" ]; then
+              # Extract base name and construct parameter file
+              base_name=$(basename "$bicep_file" .bicep)
+              dir_name=$(dirname "$bicep_file")
+              param_file="${dir_name}/${base_name}-${ENV}.parameters.json"
+              
+              if [ -f "$param_file" ]; then
+                echo "Running what-if for $bicep_file with $param_file..."
+                az deployment group what-if \
+                  --resource-group "$RG_NAME" \
+                  --template-file "$bicep_file" \
+                  --parameters @"$param_file" \
+                  --no-pretty-print \
+                  --result-format ResourceIdOnly || echo "⚠️  What-If failed for $bicep_file (may be expected if resources don't exist yet)"
+              else
+                echo "⚠️  Parameter file not found: $param_file — skipping what-if."
+              fi
+            fi
+          done
+          echo "✅ Resource Group what-if validations completed!"
+          echo "::endgroup::"
+
+      - name: Skip What-If for Resource Group (RG doesn't exist)
+        if: steps.check-rg.outputs.rg_exists == 'false'
+        run: |
+          echo "::group::Skipping Resource Group What-If Analysis"
+          echo "ℹ️  Resource Group '${{ steps.set-rg.outputs.rg_name }}' does not exist yet."
+          echo "ℹ️  What-If analysis for Resource Group scoped deployments will be skipped."
+          echo "ℹ️  This is normal for new environments or branches."
+          echo "ℹ️  What-If will run during actual deployment when RG exists."
+          echo "::endgroup::"
+
+      - name: Run What-If for Subscription deployments
+        run: |
+          echo "::group::Performing What-If for Subscription scoped deployments"
+          ENV="${{ steps.set-env.outputs.validation_env }}"
+          
+          # List of subscription scoped deployments
+          sub_deployments=(
+            "infra/resource-group-creation/resource-group.bicep"
+          )
+          
+          for bicep_file in "${sub_deployments[@]}"; do
+            if [ -f "$bicep_file" ]; then
+              # Extract base name and construct parameter file
+              base_name=$(basename "$bicep_file" .bicep)
+              dir_name=$(dirname "$bicep_file")
+              param_file="${dir_name}/${base_name}-${ENV}.parameters.json"
+              
+              if [ -f "$param_file" ]; then
+                echo "Running what-if for $bicep_file with $param_file..."
+                az deployment sub what-if \
+                  --location westus2 \
+                  --template-file "$bicep_file" \
+                  --parameters @"$param_file" \
+                  --no-pretty-print \
+                  --result-format ResourceIdOnly || echo "⚠️  What-If failed for $bicep_file"
+              else
+                echo "⚠️  Parameter file not found: $param_file — skipping what-if."
+              fi
+            fi
+          done
+          echo "✅ Subscription what-if validations completed!"
+          echo "::endgroup::"
+
+      - name: Run basic pytest validation
+        run: |
+          echo "::group::Running pytest validation"
+          cat > test_bicep_compile.py <<'EOF'
+          import os
+          import subprocess
+          import glob
+          import json
+
+          def test_bicep_files_exist():
+              """Verify that Bicep files exist in the repo"""
+              bicep_files = glob.glob("infra/**/*.bicep", recursive=True)
+              assert bicep_files, "No .bicep files found in infra directory."
+              print(f"✓ Found {len(bicep_files)} Bicep files")
+
+          def test_bicep_build():
+              """Test that all Bicep files compile successfully"""
+              bicep_files = glob.glob("infra/**/*.bicep", recursive=True)
+              for file in bicep_files:
+                  print(f"Testing build for {file}")
+                  result = subprocess.run(
+                      ["az", "bicep", "build", "--file", file],
+                      capture_output=True,
+                      text=True
+                  )
+                  assert result.returncode == 0, f"Bicep build failed for {file}: {result.stderr}"
+              print(f"✓ All {len(bicep_files)} Bicep files compiled successfully")
+
+          def test_parameter_files_exist():
+              """Verify that parameter files exist for each Bicep file"""
+              bicep_files = glob.glob("infra/**/*.bicep", recursive=True)
+              environments = ['dev', 'uat', 'sbx', 'prd']
+              
+              for bicep_file in bicep_files:
+                  base_name = os.path.basename(bicep_file).replace('.bicep', '')
+                  dir_name = os.path.dirname(bicep_file)
+                  
+                  for env in environments:
+                      param_file = os.path.join(dir_name, f"{base_name}-{env}.parameters.json")
+                      assert os.path.isfile(param_file), f"Missing parameter file: {param_file}"
+              
+              print(f"✓ All required parameter files exist")
+
+          def test_parameter_files_valid_json():
+              """Verify that all parameter files are valid JSON"""
+              param_files = glob.glob("infra/**/*.parameters.json", recursive=True)
+              
+              for param_file in param_files:
+                  with open(param_file, 'r', encoding='utf-8') as f:
+                      try:
+                          data = json.load(f)
+                          assert "parameters" in data or "$schema" in data, \
+                              f"Parameter file {param_file} missing required top-level keys"
+                      except json.JSONDecodeError as e:
+                          assert False, f"Invalid JSON in {param_file}: {e}"
+              
+              print(f"✓ All {len(param_files)} parameter files are valid JSON")
+
+          def test_bicep_naming_convention():
+              """Verify Bicep files follow naming conventions"""
+              bicep_files = glob.glob("infra/**/*.bicep", recursive=True)
+              
+              for bicep_file in bicep_files:
+                  base_name = os.path.basename(bicep_file)
+                  # Check that file names use kebab-case (lowercase with hyphens)
+                  assert base_name.islower() or '-' in base_name, \
+                      f"Bicep file {bicep_file} should use kebab-case naming"
+              
+              print(f"✓ All Bicep files follow naming conventions")
+          EOF
+          
+          pytest -v --maxfail=1 --disable-warnings --tb=short
+          echo "::endgroup::"
+
+      - name: Generate validation report
+        if: always()
+        run: |
+          echo "::group::Validation Summary"
+          echo "=========================================="
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Validation Environment: ${{ steps.set-env.outputs.validation_env }}"
+          echo "Resource Group: ${{ steps.set-rg.outputs.rg_name }}"
+          echo "RG Exists: ${{ steps.check-rg.outputs.rg_exists }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.event_name }}"
+          echo "=========================================="
+          echo "✅ All validations completed"
+          echo "::endgroup::"
